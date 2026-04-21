@@ -272,6 +272,9 @@ if detection_state is not None:
         st.subheader("Detected groups")
         decoded_df = pd.DataFrame(flat_rows)
         decoded_pretty_df = apply_label_maps(decoded_df, attributes, label_maps)
+        decoded_pretty_df["pattern"] = decoded_pretty_df["pattern"].apply(
+            lambda pattern_str: pattern_to_text(pattern_str, attributes, label_maps)
+        )
         display_cols = ["k"] + attributes + ["pattern"]
         st.dataframe(to_arrow_safe_df(decoded_pretty_df[display_cols]))
 
@@ -305,9 +308,14 @@ if detection_state is not None:
             else:
                 st.subheader("Explanation (Shapley values)")
                 st.caption("Higher absolute Shapley values indicate stronger impact for that detected group.")
-                st.dataframe(to_arrow_safe_df(explanation_df))
-Explanation (Shapley values)")
-                st.caption("Higher absolute Shapley values indicate stronger impact for that detected group.")
-                st.dataframe(to_arrow_safe_df(st.session_state.explanation_df))
-    else:
-        st.info("No biased groups found.")
+
+                patterns = explanation_df["group_pattern"].dropna().unique().tolist()
+                for pattern in patterns:
+                    pattern_df = explanation_df[explanation_df["group_pattern"] == pattern].copy()
+                    pattern_df = pattern_df.sort_values(by="impact_rank")
+                    readable_pattern = pattern_df["group"].iloc[0] if not pattern_df.empty else pattern
+
+                    st.markdown(f"#### Pattern: {readable_pattern}")
+
+                    table_df = pattern_df.drop(columns=["group_pattern", "group"], errors="ignore")
+                    st.dataframe(to_arrow_safe_df(table_df))
