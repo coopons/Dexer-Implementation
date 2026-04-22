@@ -14,6 +14,8 @@ def init_session_state():
         st.session_state.detection_state = None
     if "explanation_df" not in st.session_state:
         st.session_state.explanation_df = None
+    if "last_what_if_signature" not in st.session_state:
+        st.session_state.last_what_if_signature = None
 
 
 def decode_pattern(pattern_str, attributes):
@@ -249,8 +251,19 @@ if st.button("Run detection", disabled=not ready_to_run):
                 "k_max": int(k_max),
                 "ranked_df": ranked_df,
                 "value_label_maps": label_maps,
+                "threshold": float(threshold),
+                "mode": mode,
+                "alpha": float(alpha),
             }
             st.session_state.explanation_df = None
+            st.session_state.last_what_if_signature = (
+                mode,
+                round(float(alpha), 6),
+                round(float(threshold), 6),
+                tuple(selected_attributes),
+                int(k_min),
+                int(k_max),
+            )
 
         except Exception:
             st.code(traceback.format_exc())
@@ -263,6 +276,73 @@ if detection_state is not None:
     k_max_state = detection_state["k_max"]
     ranked_df = detection_state["ranked_df"]
     label_maps = detection_state["value_label_maps"]
+    threshold_state = float(detection_state.get("threshold", threshold))
+    mode_state = detection_state.get("mode", mode)
+    alpha_state = float(detection_state.get("alpha", alpha))
+
+    with st.expander("What-if analysis", expanded=False):
+        live_what_if = st.toggle("Live updates while sliding", value=True, key="what_if_live_toggle")
+
+        if mode_state == "prop":
+            alpha_default = min(max(alpha_state, 0.0), 1.0)
+            what_if_alpha = st.slider(
+                "What-if alpha",
+                min_value=0.0,
+                max_value=1.0,
+                value=alpha_default,
+                step=0.01,
+                key="what_if_alpha_prop",
+            )
+        else:
+            alpha_int_default = max(1, int(round(alpha_state)))
+            alpha_upper = max(50, alpha_int_default * 3, int(k_max_state) * 2)
+            what_if_alpha = st.slider(
+                "What-if global lower bound",
+                min_value=1,
+                max_value=alpha_upper,
+                value=min(alpha_int_default, alpha_upper),
+                step=1,
+                key="what_if_alpha_global",
+            )
+
+        current_signature = (
+            mode_state,
+            round(float(what_if_alpha), 6),
+            round(float(threshold_state), 6),
+            tuple(attributes),
+            int(k_min_state),
+            int(k_max_state),
+        )
+
+        apply_what_if = False
+        if live_what_if:
+            apply_what_if = st.session_state.last_what_if_signature != current_signature
+        elif st.button("Apply what-if", key="apply_what_if_btn"):
+            apply_what_if = True
+
+        if apply_what_if:
+            try:
+                with st.spinner("Updating detected groups for what-if parameters..."):
+                    detection_df = ranked_df[attributes].copy()
+                    updated_detection = run_detection(
+                        detection_df,
+                        attributes,
+                        threshold_state,
+                        what_if_alpha,
+                        int(k_min_state),
+                        int(k_max_state),
+                        mode=mode_state,
+                    )
+
+                detection_state["groups"] = updated_detection["groups"]
+                detection_state["alpha"] = float(what_if_alpha)
+                st.session_state.detection_state = detection_state
+                st.session_state.last_what_if_signature = current_signature
+                st.session_state.explanation_df = None
+                groups = detection_state["groups"]
+                st.success("What-if update applied.")
+            except Exception:
+                st.code(traceback.format_exc())
 
     flat_rows = flatten_detected_groups(groups, attributes, k_min_state)
 
@@ -279,6 +359,10 @@ if detection_state is not None:
         st.dataframe(to_arrow_safe_df(decoded_pretty_df[display_cols]))
 
         available_ks = list(range(int(k_min_state), int(k_max_state)))
+        if not available_ks:
+            st.warning("No valid k values for explanation. Increase k_max so that k_max > k_min.")
+            st.stop()
+
         selected_k = st.selectbox("Select k for explanation", available_ks, key="selected_k_expl")
         level_index = int(selected_k) - int(k_min_state)
 
